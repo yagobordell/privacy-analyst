@@ -24,7 +24,7 @@ En desarrollo activo. Progreso actual:
 - [x] Fase 3 — Chunking de documentos
 - [x] Fase 4 — Embeddings y base de datos vectorial
 - [x] Fase 5 — Pipeline RAG completo
-- [ ] Fase 6 — Interfaz de chat
+- [x] Fase 6 — Interfaz de chat
 - [ ] Fase 7 — Pulido, pruebas y verificación de privacidad
 
 ## Arquitectura
@@ -115,16 +115,30 @@ curl http://localhost:11434
 Debería devolver `Ollama is running`. Si falla, ver la sección de
 Troubleshooting más abajo.
 
-## Uso
+### 6. Desactivar telemetría de Streamlit
 
-_(Pendiente — se documentará al completar la Fase 6, interfaz de chat)_
+Por defecto, Streamlit envía estadísticas de uso a servidores externos —
+incompatible con el objetivo de privacidad de este proyecto. Desactivar con:
+
+```bash
+mkdir -p ~/.streamlit
+cat > ~/.streamlit/config.toml << 'EOF'
+[browser]
+gatherUsageStats = false
+EOF
+```
+
+## Uso
 
 ```bash
 source venv/bin/activate
-python3 src/ingestion/parser.py      # extrae texto de los PDFs en data/
-python3 src/ingestion/chunker.py     # trocea el texto extraído
-python3 src/vectorstore/indexer.py   # genera embeddings e indexa en ChromaDB
+streamlit run src/ui/app.py
 ```
+
+Esto abrirá la interfaz en `http://localhost:8501`. Desde ahí puedes:
+1. Subir un PDF desde el panel lateral y pulsar "Procesar e indexar".
+2. Escribir preguntas en el chat sobre los documentos ya indexados.
+3. Desplegar "Ver fuentes" en cada respuesta para comprobar de qué documento y página proviene la información.
 
 ## Estructura del proyecto
 privacy-analyst/
@@ -272,7 +286,7 @@ de cada sesión:
     búsqueda por embeddings puros.
 - **Extracción de tablas**: ver sección de la Fase 2/3.
 - **Codificación de caracteres especiales**: ver sección de la Fase 2.
-  Se implementó además un reranker con cross-encoder multilingüe
+- Se implementó además un reranker con cross-encoder multilingüe
   (`cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`) para mitigar falsos
   positivos del bi-encoder. Resultado: el cross-encoder **coincide** con
   el bi-encoder en puntuar el chunk del contrato como más relevante que
@@ -290,6 +304,9 @@ Este proyecto está diseñado para que, tras la configuración inicial (descarga
 de modelos), no se realice ninguna conexión de red saliente durante el uso
 normal. _(Pendiente de verificación y documentación formal en la Fase 7 —
 se incluirán capturas o logs de red confirmando ausencia de tráfico externo)._
+Se ha desactivado explícitamente la telemetría de Streamlit
+(`gatherUsageStats = false`), que por defecto envía estadísticas de uso
+a servidores en EE.UU.
 
 ## Licencia
 

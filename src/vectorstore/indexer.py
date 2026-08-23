@@ -48,5 +48,20 @@ def indexar_chunks(carpeta_chunks: str = "data/chunks", nombre_coleccion: str = 
     print(f"\nTotal: {total_indexados} chunks indexados en la colección '{nombre_coleccion}'")
 
 
+def indexar_chunks_de_lista(chunks: list[dict], coleccion) -> None:
+    """Genera embeddings e indexa una lista de chunks ya en memoria (sin pasar por disco)."""
+    for chunk in chunks:
+        embedding = generar_embedding(chunk["texto"])
+        coleccion.upsert(
+            ids=[chunk["id"]],
+            embeddings=[embedding],
+            documents=[chunk["texto"]],
+            metadatas=[{
+                "documento_origen": chunk["documento_origen"],
+                "pagina": chunk["pagina"],
+            }],
+        )
+
+
 if __name__ == "__main__":
     indexar_chunks()
