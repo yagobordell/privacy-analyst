@@ -3,7 +3,7 @@ from pathlib import Path
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
-def crear_chunks_de_documento(ruta_json: str, tamano_chunk: int = 600, solapamiento: int = 100) -> list[dict]:
+def crear_chunks_de_documento(ruta_json: str, tamano_chunk: int = 1200, solapamiento: int = 150) -> list[dict]:
     """Lee un JSON procesado (salida de parser.py) y lo trocea en chunks con metadata."""
     with open(ruta_json, "r", encoding="utf-8") as f:
         documento = json.load(f)

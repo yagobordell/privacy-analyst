@@ -23,7 +23,7 @@ En desarrollo activo. Progreso actual:
 - [x] Fase 2 — Ingesta y extracción de texto de PDFs
 - [x] Fase 3 — Chunking de documentos
 - [x] Fase 4 — Embeddings y base de datos vectorial
-- [ ] Fase 5 — Pipeline RAG completo
+- [x] Fase 5 — Pipeline RAG completo
 - [ ] Fase 6 — Interfaz de chat
 - [ ] Fase 7 — Pulido, pruebas y verificación de privacidad
 
@@ -246,7 +246,44 @@ de cada sesión:
   corpus de solo 11 chunks. Es suficiente para detectar problemas evidentes
   de discriminación semántica, pero no para medir con precisión estadística
   la calidad de la recuperación a mayor escala.
-
+- **Preguntas ambiguas entre múltiples documentos similares**: cuando una
+  pregunta no especifica el documento (ej. "¿qué parte de mi sueldo se va
+  a Hacienda?" con varias nóminas y un contrato indexados), el sistema
+  puede fallar en identificar el contexto correcto. Diagnóstico completo:
+  - El pipeline de recuperación (embeddings + ChromaDB) funciona
+    correctamente en general, pero para este vocabulario concreto, un
+    chunk del contrato (que menciona una cifra de dinero) obtiene una
+    distancia semántica *menor* que las nóminas con el dato de IRPF
+    realmente relevante — el modelo de embeddings confunde "dinero en
+    general" con "retención fiscal específica".
+  - Un filtro por umbral de distancia no resuelve esto, porque el chunk
+    problemático no es "ruido lejano" sino un falso positivo con alta
+    similitud aparente.
+  - Con el contexto limpiado manualmente (solo las nóminas), el LLM sí
+    logra comparar y listar los tres valores por documento, aunque con
+    algún error conceptual (confunde base imponible con cuota retenida
+    en un caso).
+  - **Mitigación funcional**: preguntas que especifican el documento
+    (ej. "en la nómina estándar") se resuelven correctamente mediante
+    filtrado por metadata, implementado en el pipeline.
+  - **Mejoras futuras posibles**: un reranker con cross-encoder tras la
+    recuperación inicial (mencionado en el diseño original del stack)
+    probablemente distinguiría mejor este tipo de falso positivo que la
+    búsqueda por embeddings puros.
+- **Extracción de tablas**: ver sección de la Fase 2/3.
+- **Codificación de caracteres especiales**: ver sección de la Fase 2.
+  Se implementó además un reranker con cross-encoder multilingüe
+  (`cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`) para mitigar falsos
+  positivos del bi-encoder. Resultado: el cross-encoder **coincide** con
+  el bi-encoder en puntuar el chunk del contrato como más relevante que
+  las nóminas para esta pregunta concreta (score -3.94 vs. -5.4 a -5.7),
+  lo que indica que el problema no es un fallo aislado de un modelo, sino
+  que la pregunta, en términos de vocabulario, comparte más campo
+  semántico general ("sueldo", "dinero") con el contrato que con la
+  terminología técnica de las nóminas ("IRPF", "retención"). Una posible
+  solución sería *query rewriting* (reformular la pregunta con
+  vocabulario técnico antes de la búsqueda), no implementado por quedar
+  fuera del alcance de este proyecto.
 ## Privacidad
 
 Este proyecto está diseñado para que, tras la configuración inicial (descarga
