@@ -22,7 +22,7 @@ En desarrollo activo. Progreso actual:
 - [x] Fase 1 — Motor LLM local (Ollama)
 - [x] Fase 2 — Ingesta y extracción de texto de PDFs
 - [x] Fase 3 — Chunking de documentos
-- [ ] Fase 4 — Embeddings y base de datos vectorial
+- [x] Fase 4 — Embeddings y base de datos vectorial
 - [ ] Fase 5 — Pipeline RAG completo
 - [ ] Fase 6 — Interfaz de chat
 - [ ] Fase 7 — Pulido, pruebas y verificación de privacidad
@@ -33,10 +33,9 @@ Usuario → Interfaz de chat (Streamlit)
 ┌─────────────────────────────────────┐
 │ Tu ordenador (offline) │
 │ │
-│ Ingesta → Base vectorial → LLM local│
+│ Ingesta → Base vectorial → LLM local │
 │ (PDF→chunks) (ChromaDB) (Ollama) │
 └─────────────────────────────────────┘
-
 
 Ningún componente requiere conexión a internet una vez descargados los modelos.
 
@@ -45,8 +44,8 @@ Ningún componente requiere conexión a internet una vez descargados los modelos
 | Componente | Herramienta | Motivo |
 |---|---|---|
 | Motor LLM | Ollama + Llama 3.1 8B (Q4_K_M) | Ejecuta modelos cuantizados en CPU sin GPU dedicada |
-| Embeddings | nomic-embed-text (pendiente de integrar) | Modelo ligero, corre en CPU |
-| Base vectorial | ChromaDB (pendiente de integrar) | Embebida, sin servidor externo, persistencia en disco |
+| Embeddings | bge-m3 (vía Ollama) | Modelo multilingüe, buen rendimiento en español (ver Decisiones técnicas) |
+| Base vectorial | ChromaDB (métrica coseno) | Embebida, sin servidor externo, persistencia en disco |
 | Extracción de PDF | pdfplumber + pytesseract (OCR) | Detección automática de texto nativo vs. escaneado |
 | Chunking | langchain-text-splitters | Troceado recursivo con solapamiento |
 | Interfaz | Streamlit (pendiente de integrar) | Chat web sin necesidad de frontend dedicado |
@@ -96,12 +95,13 @@ Descargar desde [ollama.com/download](https://ollama.com/download) e instalar
 con las opciones por defecto. Ollama queda corriendo como servicio en
 `http://localhost:11434`.
 
-### 4. Descargar el modelo LLM
+### 4. Descargar los modelos necesarios
 
 Desde PowerShell:
 
 ```powershell
 ollama pull llama3.1:8b
+ollama pull bge-m3
 ```
 
 ### 5. Verificar la conexión WSL ↔ Ollama
@@ -121,8 +121,9 @@ _(Pendiente — se documentará al completar la Fase 6, interfaz de chat)_
 
 ```bash
 source venv/bin/activate
-python3 src/ingestion/parser.py    # extrae texto de los PDFs en data/
-python3 src/ingestion/chunker.py   # trocea el texto extraído
+python3 src/ingestion/parser.py      # extrae texto de los PDFs en data/
+python3 src/ingestion/chunker.py     # trocea el texto extraído
+python3 src/vectorstore/indexer.py   # genera embeddings e indexa en ChromaDB
 ```
 
 ## Estructura del proyecto
@@ -130,16 +131,56 @@ privacy-analyst/
 ├── data/ # PDFs de prueba (no versionado, ver .gitignore)
 │ └── procesados/ # JSONs con texto extraído por página
 │ └── chunks/ # JSONs con texto troceado
+│ └── chroma_db/ # Base de datos vectorial persistente (no versionado)
 ├── src/
 │ ├── ingestion/ # parsing de PDF, OCR, chunking
-│ ├── embeddings/ # generación de embeddings (pendiente)
-│ ├── vectorstore/ # integración con ChromaDB (pendiente)
+│ ├── vectorstore/ # generación de embeddings e indexación en ChromaDB
 │ ├── rag/ # pipeline de recuperación + generación (pendiente)
 │ └── ui/ # interfaz Streamlit (pendiente)
 ├── notebooks/ # experimentación
 ├── tests/
 └── README.md
 
+## Decisiones técnicas
+
+### Cambio de modelo de embeddings: nomic-embed-text → bge-m3
+
+Durante la Fase 4 se probó primero `nomic-embed-text` como modelo de embeddings.
+Al evaluar la recuperación con preguntas en español que no compartían vocabulario
+literal con los documentos (ej. "¿qué parte de mi sueldo se va a Hacienda?" para
+recuperar chunks sobre IRPF), el sistema devolvía consistentemente fragmentos
+irrelevantes (un contrato de trabajo) por delante de los relevantes (nóminas
+con las deducciones fiscales).
+
+**Diagnóstico**: se midieron las distancias de todos los chunks frente a la
+consulta. El rango de distancias era muy estrecho (0.399–0.511 con métrica
+coseno) para un corpus con contenidos claramente distintos, lo que indicaba
+que el modelo no discriminaba bien el significado en español. Chunks que
+contenían literalmente la palabra "IRPF" aparecían peor rankeados que
+fragmentos sin relación temática.
+
+**Causa probable**: `nomic-embed-text` está entrenado mayoritariamente en
+corpus en inglés, con soporte multilingüe débil.
+
+**Solución**: se cambió a `bge-m3`, un modelo de embeddings multilingüe
+(100+ idiomas, incluido español) de BAAI. Tras reindexar, el rango de
+distancias se amplió (0.476–0.650) y las nóminas relevantes pasaron a
+ocupar las primeras posiciones, con el contrato relegado al final del
+ranking — el comportamiento esperado.
+
+**Trade-off**: `bge-m3` genera vectores de mayor dimensión (1024 vs. 768)
+y es un modelo más pesado computacionalmente que `nomic-embed-text`. Para
+el volumen de documentos de este proyecto, el impacto en rendimiento es
+despreciable frente a la mejora en calidad de recuperación.
+
+### Métrica de distancia en ChromaDB: euclidiana → coseno
+
+Por defecto, ChromaDB usa distancia euclidiana. Con embeddings no
+normalizados a longitud unitaria, esta métrica se ve afectada por la
+magnitud de los vectores además de su dirección semántica, degradando
+la calidad de la búsqueda. Se configuró la colección explícitamente con
+`metadata={"hnsw:space": "cosine"}`, que solo considera el ángulo entre
+vectores (el significado), ignorando su magnitud.
 
 ## Troubleshooting
 
@@ -151,7 +192,6 @@ corriendo en Windows nativo (como Ollama), incluso estando en la misma máquina.
 **Síntoma:**
 curl http://localhost:11434
 curl: (7) Failed to connect to localhost port 11434
-
 
 **Solución aplicada:** activar el modo de red "mirrored" de WSL2, que unifica
 el stack de red de WSL con el de Windows (requiere Windows 11 22H2+).
@@ -202,6 +242,10 @@ de cada sesión:
   `º` se extraen incorrectamente como `?`, probablemente por la tabla de
   fuentes embebida en el PDF de origen. Afecta a casos puntuales, no a la
   legibilidad general del texto.
+- **Corpus de prueba reducido**: la validación de la Fase 4 se hizo con un
+  corpus de solo 11 chunks. Es suficiente para detectar problemas evidentes
+  de discriminación semántica, pero no para medir con precisión estadística
+  la calidad de la recuperación a mayor escala.
 
 ## Privacidad
 
