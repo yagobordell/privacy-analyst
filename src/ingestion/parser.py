@@ -5,64 +5,64 @@ from pathlib import Path
 import json
 
 
-def extraer_texto_nativo(ruta_pdf: str) -> list[dict]:
-    """Intenta extraer texto directamente del PDF (caso rápido y preciso)."""
-    paginas = []
-    with pdfplumber.open(ruta_pdf) as pdf:
-        for i, pagina in enumerate(pdf.pages):
-            texto = pagina.extract_text() or ""
-            paginas.append({"pagina": i + 1, "texto": texto})
-    return paginas
+def extract_native_text(pdf_path: str) -> list[dict]:
+    """Attempts to extract text directly from the PDF (fast, accurate path)."""
+    pages = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for i, page in enumerate(pdf.pages):
+            text = page.extract_text() or ""
+            pages.append({"page": i + 1, "text": text})
+    return pages
 
 
-def extraer_texto_ocr(ruta_pdf: str, idioma: str = "spa") -> list[dict]:
-    """Fallback: convierte cada página a imagen y aplica OCR."""
-    imagenes = convert_from_path(ruta_pdf)
-    paginas = []
-    for i, imagen in enumerate(imagenes):
-        texto = pytesseract.image_to_string(imagen, lang=idioma)
-        paginas.append({"pagina": i + 1, "texto": texto})
-    return paginas
+def extract_text_ocr(pdf_path: str, language: str = "spa") -> list[dict]:
+    """Fallback: converts each page to an image and applies OCR."""
+    images = convert_from_path(pdf_path)
+    pages = []
+    for i, image in enumerate(images):
+        text = pytesseract.image_to_string(image, lang=language)
+        pages.append({"page": i + 1, "text": text})
+    return pages
 
 
-def procesar_pdf(ruta_pdf: str, umbral_caracteres: int = 20) -> dict:
+def process_pdf(pdf_path: str, char_threshold: int = 20) -> dict:
     """
-    Extrae el texto de un PDF, detectando automáticamente si necesita OCR.
-    umbral_caracteres: si una página nativa tiene menos texto que esto,
-    se considera "vacía" y se re-procesa con OCR.
+    Extracts text from a PDF, automatically detecting whether OCR is needed.
+    char_threshold: if a native page has fewer characters than this,
+    it's considered "empty" and reprocessed with OCR.
     """
-    nombre_archivo = Path(ruta_pdf).name
-    paginas = extraer_texto_nativo(ruta_pdf)
+    file_name = Path(pdf_path).name
+    pages = extract_native_text(pdf_path)
 
-    texto_total = sum(len(p["texto"].strip()) for p in paginas)
-    promedio_por_pagina = texto_total / max(len(paginas), 1)
+    total_chars = sum(len(p["text"].strip()) for p in pages)
+    avg_chars_per_page = total_chars / max(len(pages), 1)
 
-    metodo_usado = "nativo"
-    if promedio_por_pagina < umbral_caracteres:
-        print(f"[{nombre_archivo}] Poco texto detectado ({promedio_por_pagina:.0f} car/pág) → aplicando OCR")
-        paginas = extraer_texto_ocr(ruta_pdf)
-        metodo_usado = "ocr"
+    method_used = "native"
+    if avg_chars_per_page < char_threshold:
+        print(f"[{file_name}] Low text detected ({avg_chars_per_page:.0f} chars/page) -> applying OCR")
+        pages = extract_text_ocr(pdf_path)
+        method_used = "ocr"
 
     return {
-        "archivo": nombre_archivo,
-        "metodo": metodo_usado,
-        "num_paginas": len(paginas),
-        "paginas": paginas,
+        "file": file_name,
+        "method": method_used,
+        "num_pages": len(pages),
+        "pages": pages,
     }
 
 
 if __name__ == "__main__":
-    carpeta_datos = Path("data")
-    carpeta_salida = Path("data/procesados")
-    carpeta_salida.mkdir(exist_ok=True)
+    data_folder = Path("data")
+    output_folder = Path("data/processed")
+    output_folder.mkdir(exist_ok=True)
 
-    pdfs = list(carpeta_datos.glob("*.pdf"))
+    pdfs = list(data_folder.glob("*.pdf"))
     if not pdfs:
-        print("No se encontraron PDFs en data/. Añade alguno antes de continuar.")
+        print("No PDFs found in data/. Add one before continuing.")
 
-    for ruta_pdf in pdfs:
-        resultado = procesar_pdf(str(ruta_pdf))
-        salida = carpeta_salida / f"{ruta_pdf.stem}.json"
-        with open(salida, "w", encoding="utf-8") as f:
-            json.dump(resultado, f, ensure_ascii=False, indent=2)
-        print(f"[{resultado['archivo']}] procesado con método '{resultado['metodo']}' → {salida}")
+    for pdf_path in pdfs:
+        result = process_pdf(str(pdf_path))
+        output_path = output_folder / f"{pdf_path.stem}.json"
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+        print(f"[{result['file']}] processed with method '{result['method']}' -> {output_path}")

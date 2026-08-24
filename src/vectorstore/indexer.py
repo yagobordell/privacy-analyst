@@ -4,64 +4,54 @@ import chromadb
 import ollama
 
 
-def generar_embedding(texto: str, modelo: str = "bge-m3") -> list[float]:
-    """Genera el vector de embedding de un texto usando Ollama."""
-    respuesta = ollama.embeddings(model=modelo, prompt=texto)
-    return respuesta["embedding"]
-
-def indexar_chunks(carpeta_chunks: str = "data/chunks", nombre_coleccion: str = "documentos_privados"):
-    """Lee todos los chunks generados en la Fase 3, genera sus embeddings
-    y los guarda en una colección persistente de ChromaDB."""
-
-    cliente = chromadb.PersistentClient(path="data/chroma_db")
-
-    coleccion = cliente.get_or_create_collection(
-    name=nombre_coleccion,
-    metadata={"hnsw:space": "cosine"},)
-
-    archivos_chunks = list(Path(carpeta_chunks).glob("*.json"))
-    if not archivos_chunks:
-        print("No hay chunks disponibles. Ejecuta primero chunker.py")
-        return
-
-    total_indexados = 0
-    for ruta_archivo in archivos_chunks:
-        with open(ruta_archivo, "r", encoding="utf-8") as f:
-            chunks = json.load(f)
-
-        for chunk in chunks:
-            embedding = generar_embedding(chunk["texto"])
-
-            coleccion.upsert(
-                ids=[chunk["id"]],
-                embeddings=[embedding],
-                documents=[chunk["texto"]],
-                metadatas=[{
-                    "documento_origen": chunk["documento_origen"],
-                    "pagina": chunk["pagina"],
-                }],
-            )
-            total_indexados += 1
-
-        print(f"[{ruta_archivo.stem}] {len(chunks)} chunks indexados")
-
-    print(f"\nTotal: {total_indexados} chunks indexados en la colección '{nombre_coleccion}'")
+def generate_embedding(text: str, model: str = "bge-m3") -> list[float]:
+    """Generates the embedding vector for a text using Ollama."""
+    response = ollama.embeddings(model=model, prompt=text)
+    return response["embedding"]
 
 
-def indexar_chunks_de_lista(chunks: list[dict], coleccion) -> None:
-    """Genera embeddings e indexa una lista de chunks ya en memoria (sin pasar por disco)."""
+def index_chunks_from_list(chunks: list[dict], collection) -> None:
+    """Generates embeddings and indexes a list of chunks already in memory (no disk round-trip)."""
     for chunk in chunks:
-        embedding = generar_embedding(chunk["texto"])
-        coleccion.upsert(
+        embedding = generate_embedding(chunk["text"])
+        collection.upsert(
             ids=[chunk["id"]],
             embeddings=[embedding],
-            documents=[chunk["texto"]],
+            documents=[chunk["text"]],
             metadatas=[{
-                "documento_origen": chunk["documento_origen"],
-                "pagina": chunk["pagina"],
+                "source_document": chunk["source_document"],
+                "page": chunk["page"],
             }],
         )
 
 
+def index_chunks(chunks_folder: str = "data/chunks", collection_name: str = "private_documents"):
+    """Reads all chunks generated in the chunking step, generates their embeddings
+    and stores them in a persistent ChromaDB collection."""
+
+    client = chromadb.PersistentClient(path="data/chroma_db")
+
+    collection = client.get_or_create_collection(
+        name=collection_name,
+        metadata={"hnsw:space": "cosine"},
+    )
+
+    chunk_files = list(Path(chunks_folder).glob("*.json"))
+    if not chunk_files:
+        print("No chunks available. Run chunker.py first.")
+        return
+
+    total_indexed = 0
+    for file_path in chunk_files:
+        with open(file_path, "r", encoding="utf-8") as f:
+            chunks = json.load(f)
+
+        index_chunks_from_list(chunks, collection)
+        total_indexed += len(chunks)
+        print(f"[{file_path.stem}] {len(chunks)} chunks indexed")
+
+    print(f"\nTotal: {total_indexed} chunks indexed in collection '{collection_name}'")
+
+
 if __name__ == "__main__":
-    indexar_chunks()
+    index_chunks()

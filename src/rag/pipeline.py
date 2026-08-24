@@ -1,168 +1,169 @@
-import chromadb
 import unicodedata
-from sentence_transformers import CrossEncoder
+import chromadb
 import ollama
+from sentence_transformers import CrossEncoder
+
+
+PROMPT_TEMPLATE = """You are an assistant that answers questions based EXCLUSIVELY on the provided context.
+
+Strict rules:
+- Each context fragment is labeled with [Source: file_name, page X]. That file name identifies which document the fragment comes from, even if that word doesn't appear within the text itself.
+- If multiple documents in the context contain relevant but different data (e.g. several payslips with different amounts), do not pick one arbitrarily: mention the data from EACH document separately, citing its source.
+- If the answer is not in the context, explicitly say "I cannot find that information in the provided documents." Do not make up data.
+- Always cite the document and page you took each piece of data from, using the format (Source: file_name, page X).
+- Do not use external information or general knowledge, only what appears in the context.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
 
 
 _reranker = None
 
-def obtener_reranker() -> CrossEncoder:
-    """Carga el modelo de reranking una sola vez (lazy loading)."""
+def get_reranker() -> CrossEncoder:
+    """Loads the reranking model once (lazy loading)."""
     global _reranker
     if _reranker is None:
-        print("Cargando modelo de reranking (solo la primera vez)...")
+        print("Loading reranking model (first time only)...")
         _reranker = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
     return _reranker
 
 
-def rerank_chunks(pregunta: str, chunks: list[dict], top_n: int = 4) -> list[dict]:
-    """Reordena los chunks recuperados usando un cross-encoder, más preciso
-    que la similitud de embeddings para descartar falsos positivos semánticos."""
-    if not chunks:
-        return chunks
-
-    reranker = obtener_reranker()
-    pares = [(pregunta, chunk["texto"]) for chunk in chunks]
-    puntuaciones = reranker.predict(pares)
-
-    chunks_con_puntuacion = list(zip(chunks, puntuaciones))
-    chunks_ordenados = sorted(chunks_con_puntuacion, key=lambda x: x[1], reverse=True)
-
-    # Añadimos la puntuación del reranker a cada chunk, útil para depurar
-    resultado = []
-    for chunk, puntuacion in chunks_ordenados[:top_n]:
-        chunk_con_score = dict(chunk)
-        chunk_con_score["score_reranker"] = float(puntuacion)
-        resultado.append(chunk_con_score)
-
-    return resultado
-
-
-PLANTILLA_PROMPT = """Eres un asistente que responde preguntas basándote ÚNICAMENTE en el contexto proporcionado.
-
-Reglas estrictas:
-- Cada fragmento de contexto está etiquetado con [Fuente: nombre_archivo, página X]. Ese nombre de archivo identifica de qué documento proviene el fragmento, aunque esa palabra no aparezca dentro del propio texto.
-- Si varios documentos del contexto contienen datos relevantes pero distintos entre sí (por ejemplo, varias nóminas con importes diferentes), no elijas uno arbitrariamente: menciona el dato de CADA documento por separado, indicando su fuente.
-- Si la respuesta no está en el contexto, di explícitamente "No encuentro esa información en los documentos proporcionados". No inventes datos.
-- Cita siempre el documento y la página de donde sacas cada dato, usando el formato (Fuente: nombre_archivo, página X).
-- No uses información externa ni conocimiento general, solo lo que aparece en el contexto.
-
-Contexto:
-{contexto}
-
-Pregunta: {pregunta}
-
-Respuesta:"""
-
-
-def recuperar_contexto(pregunta: str, coleccion, modelo_embeddings: str = "bge-m3", n_resultados: int = 6, filtro_documento: str | None = None, umbral_distancia: float = 0.58) -> list[dict]:
-    """Genera el embedding de la pregunta y recupera los chunks más relevantes.
-    Descarta chunks por encima de umbral_distancia (poco relevantes = ruido)."""
-    embedding_pregunta = ollama.embeddings(model=modelo_embeddings, prompt=pregunta)["embedding"]
-
-    kwargs = {"query_embeddings": [embedding_pregunta], "n_results": n_resultados}
-    if filtro_documento:
-        kwargs["where"] = {"documento_origen": filtro_documento}
-
-    resultados = coleccion.query(**kwargs)
-
-    chunks_recuperados = []
-    for doc, meta, distancia in zip(resultados["documents"][0], resultados["metadatas"][0], resultados["distances"][0]):
-        if distancia <= umbral_distancia:
-            chunks_recuperados.append({
-                "texto": doc,
-                "documento": meta["documento_origen"],
-                "pagina": meta["pagina"],
-                "distancia": distancia,
-            })
-    return chunks_recuperados
-
-
-def construir_contexto(chunks: list[dict]) -> str:
-    """Formatea los chunks recuperados como texto para insertar en el prompt."""
-    bloques = []
-    for chunk in chunks:
-        bloques.append(f"[Fuente: {chunk['documento']}, página {chunk['pagina']}]\n{chunk['texto']}")
-    return "\n\n---\n\n".join(bloques)
-
-
-def generar_respuesta(pregunta: str, contexto: str, modelo_llm: str = "llama3.1:8b") -> str:
-    """Llama al LLM con el prompt ya construido."""
-    prompt_final = PLANTILLA_PROMPT.format(contexto=contexto, pregunta=pregunta)
-
-    respuesta = ollama.generate(
-        model=modelo_llm,
-        prompt=prompt_final,
-        stream=False,
-        options={"temperature": 0.1},
-    )
-    return respuesta["response"]
-
-
-def quitar_tildes(texto: str) -> str:
-    """Normaliza el texto quitando tildes/diacríticos, para comparaciones robustas."""
+def remove_accents(text: str) -> str:
+    """Normalizes text by removing accents/diacritics, for robust comparisons."""
     return "".join(
-        c for c in unicodedata.normalize("NFD", texto)
+        c for c in unicodedata.normalize("NFD", text)
         if unicodedata.category(c) != "Mn"
     )
 
 
-def detectar_documento_mencionado(pregunta: str, coleccion) -> str | None:
-    """Comprueba si la pregunta menciona palabras clave del nombre de un documento conocido."""
-    metadatas = coleccion.get()["metadatas"]
-    documentos_disponibles = set(m["documento_origen"] for m in metadatas)
+def detect_mentioned_document(question: str, collection) -> str | None:
+    """Checks whether the question mentions a keyword unique to a known document's name.
+    Words shared across multiple document names are treated as generic and ignored."""
+    metadatas = collection.get()["metadatas"]
+    available_documents = sorted(set(m["source_document"] for m in metadatas))
 
-    pregunta_normalizada = quitar_tildes(pregunta.lower())
+    # Build word -> set of documents that contain that word in their name
+    word_to_docs: dict[str, set[str]] = {}
+    for doc in available_documents:
+        base_name = remove_accents(doc.replace(".pdf", "").replace("_", " ").lower())
+        for word in base_name.split():
+            word_to_docs.setdefault(word, set()).add(doc)
 
-    for doc in documentos_disponibles:
-        nombre_base = doc.replace(".pdf", "").replace("_", " ").lower()
-        palabras_clave = quitar_tildes(nombre_base).split()
-        palabras_clave = [p for p in palabras_clave if p not in ("nomina", "contrato")]
-        if any(palabra in pregunta_normalizada for palabra in palabras_clave):
+    normalized_question = remove_accents(question.lower())
+
+    for doc in available_documents:
+        base_name = remove_accents(doc.replace(".pdf", "").replace("_", " ").lower())
+        unique_keywords = [w for w in base_name.split() if len(word_to_docs[w]) == 1]
+        if any(keyword in normalized_question for keyword in unique_keywords):
             return doc
     return None
 
 
-def responder_pregunta(pregunta: str, coleccion, n_candidatos: int = 10, n_finales: int = 4) -> dict:
-    """Pipeline completo: recuperación amplia + reranking + generación."""
-    filtro = detectar_documento_mencionado(pregunta, coleccion)
+def retrieve_context(question: str, collection, embedding_model: str = "bge-m3", n_results: int = 10, document_filter: str | None = None) -> list[dict]:
+    """Generates the question's embedding and retrieves the most relevant chunks."""
+    question_embedding = ollama.embeddings(model=embedding_model, prompt=question)["embedding"]
 
-    # Recuperación inicial amplia (candidatos)
-    chunks_candidatos = recuperar_contexto(pregunta, coleccion, n_resultados=n_candidatos, filtro_documento=filtro)
+    kwargs = {"query_embeddings": [question_embedding], "n_results": n_results}
+    if document_filter:
+        kwargs["where"] = {"source_document": document_filter}
 
-    # Reranking: nos quedamos con los top_n más relevantes de verdad
-    chunks_finales = rerank_chunks(pregunta, chunks_candidatos, top_n=n_finales)
+    results = collection.query(**kwargs)
 
-    contexto = construir_contexto(chunks_finales)
-    respuesta = generar_respuesta(pregunta, contexto)
+    retrieved_chunks = []
+    for doc, meta, distance in zip(results["documents"][0], results["metadatas"][0], results["distances"][0]):
+        retrieved_chunks.append({
+            "text": doc,
+            "document": meta["source_document"],
+            "page": meta["page"],
+            "distance": distance,
+        })
+    return retrieved_chunks
+
+
+def rerank_chunks(question: str, chunks: list[dict], top_n: int = 4) -> list[dict]:
+    """Reorders retrieved chunks using a cross-encoder, more precise than
+    embedding similarity for filtering out semantic false positives."""
+    if not chunks:
+        return chunks
+
+    reranker = get_reranker()
+    pairs = [(question, chunk["text"]) for chunk in chunks]
+    scores = reranker.predict(pairs)
+
+    scored_chunks = list(zip(chunks, scores))
+    sorted_chunks = sorted(scored_chunks, key=lambda x: x[1], reverse=True)
+
+    result = []
+    for chunk, score in sorted_chunks[:top_n]:
+        chunk_with_score = dict(chunk)
+        chunk_with_score["reranker_score"] = float(score)
+        result.append(chunk_with_score)
+
+    return result
+
+
+def build_context(chunks: list[dict]) -> str:
+    """Formats retrieved chunks as text to insert into the prompt."""
+    blocks = []
+    for chunk in chunks:
+        blocks.append(f"[Source: {chunk['document']}, page {chunk['page']}]\n{chunk['text']}")
+    return "\n\n---\n\n".join(blocks)
+
+
+def generate_answer(question: str, context: str, llm_model: str = "llama3.1:8b") -> str:
+    """Calls the LLM with the already-built prompt."""
+    final_prompt = PROMPT_TEMPLATE.format(context=context, question=question)
+
+    response = ollama.generate(
+        model=llm_model,
+        prompt=final_prompt,
+        stream=False,
+        options={"temperature": 0.1},
+    )
+    return response["response"]
+
+
+def answer_question(question: str, collection, n_candidates: int = 10, n_final: int = 4) -> dict:
+    """Full pipeline: broad retrieval + reranking + generation."""
+    document_filter = detect_mentioned_document(question, collection)
+
+    candidate_chunks = retrieve_context(question, collection, n_results=n_candidates, document_filter=document_filter)
+    final_chunks = rerank_chunks(question, candidate_chunks, top_n=n_final)
+
+    context = build_context(final_chunks)
+    answer = generate_answer(question, context)
 
     return {
-        "pregunta": pregunta,
-        "respuesta": respuesta,
-        "filtro_aplicado": filtro,
-        "fuentes": [{"documento": c["documento"], "pagina": c["pagina"],
-                     "distancia": c["distancia"], "score_reranker": c.get("score_reranker")}
-                    for c in chunks_finales],
+        "question": question,
+        "answer": answer,
+        "filter_applied": document_filter,
+        "sources": [{"document": c["document"], "page": c["page"],
+                     "distance": c["distance"], "reranker_score": c.get("reranker_score")}
+                    for c in final_chunks],
     }
 
 
 if __name__ == "__main__":
-    cliente = chromadb.PersistentClient(path="data/chroma_db")
-    coleccion = cliente.get_collection("documentos_privados")
+    client = chromadb.PersistentClient(path="data/chroma_db")
+    collection = client.get_collection("private_documents")
 
-    preguntas_prueba = [
-        "¿Cuánto se descuenta de IRPF en la nómina estándar?",
-        "¿Qué parte de mi sueldo se va a Hacienda?",
-        "¿Cuál es la duración del contrato de trabajo?",
-        "¿Cuánto cuesta un billete de avión a Tokio?",  # pregunta sin respuesta en los documentos
+    test_questions = [
+        "How much IRPF is deducted in the standard payslip?",
+        "What part of my salary goes to the tax authority?",
+        "What is the duration of the employment contract?",
+        "How much does a plane ticket to Tokyo cost?",  # question with no answer in the documents
     ]
 
-    for pregunta in preguntas_prueba:
-        resultado = responder_pregunta(pregunta, coleccion)
+    for question in test_questions:
+        result = answer_question(question, collection)
         print(f"\n{'='*60}")
-        print(f"PREGUNTA: {resultado['pregunta']}")
+        print(f"QUESTION: {result['question']}")
         print(f"{'='*60}")
-        print(f"RESPUESTA:\n{resultado['respuesta']}")
-        print(f"\nFuentes usadas:")
-        for fuente in resultado["fuentes"]:
-	        print(f"  - {fuente['documento']} (pág {fuente['pagina']}, distancia {fuente['distancia']:.3f}, score_reranker: {fuente['score_reranker']:.3f})")
+        print(f"ANSWER:\n{result['answer']}")
+        print(f"\nSources used:")
+        for source in result["sources"]:
+            print(f"  - {source['document']} (page {source['page']}, distance {source['distance']:.3f}, reranker_score: {source['reranker_score']:.3f})")
