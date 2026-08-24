@@ -28,14 +28,18 @@ Feature-complete. All planned phases are done:
 
 ## Architecture
 
-User -> Chat interface (Streamlit)
-|
-+---------------------------------------+
-| Your computer (offline) |
-| |
-| Ingestion -> Vector store -> Local LLM |
-| (PDF->chunks) (ChromaDB) (Ollama) |
-+---------------------------------------+
+```mermaid
+flowchart TD
+    User([User]) --> UI[Chat interface<br><b>Streamlit</b>]
+    
+    subgraph Offline["Your computer (offline)"]
+        direction LR
+        Ingest[Ingestion<br><i>PDF -> chunks</i>] --> VS[(Vector store<br><i>ChromaDB</i>)]
+        VS --> LLM[Local LLM<br><i>Ollama</i>]
+    end
+    
+    UI <--> Offline
+```
 
 No component requires an internet connection once the models are downloaded.
 
@@ -82,7 +86,7 @@ sudo apt update && sudo apt upgrade -y
 sudo apt install -y python3 python3-pip python3-venv git build-essential
 sudo apt install -y tesseract-ocr tesseract-ocr-spa poppler-utils
 
-git clone https://github.com/yagobordell/privacy-analyst.git
+git clone [https://github.com/yagobordell/privacy-analyst.git](https://github.com/yagobordell/privacy-analyst.git)
 cd privacy-analyst
 
 python3 -m venv venv
@@ -151,19 +155,21 @@ python3 src/rag/pipeline.py          # runs a fixed set of test questions end-to
 
 ## Project structure
 
+```text
 privacy-analyst/
-├── data/ # Sample PDFs (not versioned, see .gitignore)
-│ ├── processed/ # JSON files with text extracted per page
-│ ├── chunks/ # JSON files with chunked text
-│ └── chroma_db/ # Persistent vector database (not versioned)
+├── data/              # Sample PDFs (not versioned, see .gitignore)
+│ ├── processed/       # JSON files with text extracted per page
+│ ├── chunks/          # JSON files with chunked text
+│ └── chroma_db/       # Persistent vector database (not versioned)
 ├── src/
-│ ├── ingestion/ # PDF parsing, OCR, chunking, single-file pipeline
-│ ├── vectorstore/ # Embedding generation and ChromaDB indexing
-│ ├── rag/ # Retrieval + reranking + generation pipeline
-│ └── ui/ # Streamlit interface
-├── notebooks/ # Exploration and prototyping
+│ ├── ingestion/       # PDF parsing, OCR, chunking, single-file pipeline
+│ ├── vectorstore/     # Embedding generation and ChromaDB indexing
+│ ├── rag/             # Retrieval + reranking + generation pipeline
+│ └── ui/              # Streamlit interface
+├── notebooks/         # Exploration and prototyping
 ├── tests/
 └── README.md
+```
 
 ## Technical decisions
 
@@ -252,8 +258,10 @@ By default, WSL2 may fail to resolve `localhost` to services running on native
 Windows (like Ollama), even on the same machine.
 
 **Symptom:**
+```text
 curl http://localhost:11434
 curl: (7) Failed to connect to localhost port 11434
+```
 
 **Fix applied**: enable WSL2's "mirrored" networking mode, which unifies WSL's
 network stack with Windows' (requires Windows 11 22H2+).
